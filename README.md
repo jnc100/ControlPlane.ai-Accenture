@@ -71,7 +71,8 @@ controlplane/
 - Python 3.10+
 - `pyyaml` — policy config parsing
 - `rich` — demo console output
-- `anthropic` — only used if you configure a real API key for the judge (optional)
+- `requests` — used for the optional real-LLM judge call via Groq
+- `anthropic` — optional alternative to Groq for the real-LLM judge path (paid; commented out in requirements.txt by default)
 
 Install with:
 
@@ -102,15 +103,27 @@ By default, the judge detector runs in **simulated mode** — a transparent,
 deterministic heuristic scorer, clearly labeled as such in every output —
 so the prototype is reviewable without requiring your own API key.
 
-To use a real Anthropic model as the judge instead:
+To use a real LLM as the judge instead, there are two options:
+
+**Option A — Groq (recommended, free).** Groq offers a free API key with no
+payment required — sign up at https://console.groq.com/keys.
+
+```bash
+export GROQ_API_KEY=your_key_here
+python demo.py
+```
+
+**Option B — Anthropic (paid alternative).** If you'd rather use a Claude
+model, uncomment `anthropic` in `requirements.txt`, install it, then:
 
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
 python demo.py
 ```
 
-No other code changes are needed — the decision engine only ever consumes a
-`JudgeResult`, regardless of which mode produced it.
+If both `GROQ_API_KEY` and `ANTHROPIC_API_KEY` are set, Groq is used first.
+No other code changes are needed for either option — the decision engine
+only ever consumes a `JudgeResult`, regardless of which mode produced it.
 
 ## Sample output
 

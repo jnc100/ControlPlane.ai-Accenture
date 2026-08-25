@@ -6,23 +6,35 @@ than checking it against absolute ground truth (which the proposal argues is
 usually unavailable in production). This is a *relative* plausibility and
 consistency check, not a fact-checker.
 
-Two modes:
-  - "llm": calls the Anthropic API with a judge prompt, used when
-    ANTHROPIC_API_KEY is set in the environment.
+Three modes, tried in this order:
+  - "llm" via Groq: used when GROQ_API_KEY is set. Groq has a free tier
+    (no payment required to get a key), so this is the recommended way for
+    a reviewer to see the real LLM-judge path without any cost.
+  - "llm" via Anthropic: used when ANTHROPIC_API_KEY is set instead
+    (paid — offered as an alternative, not the default expectation).
   - "simulated": a deterministic, explainable heuristic stand-in, used when
-    no API key is available. This keeps the prototype runnable out of the
-    box (no key required to see the mechanism work end-to-end) while making
-    it obvious in every output which mode produced a given score.
+    no API key is available at all. This keeps the prototype runnable out
+    of the box with zero setup, and every output is clearly labeled with
+    which mode produced it.
 
-Swapping "simulated" for "llm" requires no change anywhere else in the
-pipeline — the decision engine only ever sees a JudgeResult.
+Swapping between modes requires no change anywhere else in the pipeline —
+the decision engine only ever consumes a JudgeResult.
 """
 
 import hashlib
+import json
 import os
 import re
 
 from controlplane.types import JudgeResult
+
+_JUDGE_PROMPT_TEMPLATE = """You are grading how well an AI response is supported by its prompt/context.
+Score 0-100 (100 = fully supported and consistent, 0 = fabricated or contradicts context).
+
+Prompt: {prompt}
+Response: {response}
+
+Reply with ONLY a JSON object: {{"score": <int 0-100>, "rationale": "<one sentence>"}}"""
 
 _HEDGE_WORDS = re.compile(
     r"\b(?:might|may|could|possibly|approximately|around|roughly|likely|"
@@ -76,20 +88,41 @@ def _simulated_score(prompt: str, response: str) -> JudgeResult:
     return JudgeResult(score=score, rationale=f"[simulated] {rationale}", mode="simulated")
 
 
-def _llm_score(prompt: str, response: str) -> JudgeResult:
-    """Real judge call via the Anthropic API. Requires ANTHROPIC_API_KEY."""
-    import json
+def _groq_score(prompt: str, response: str) -> JudgeResult:
+    """
+    Real judge call via Groq's free-tier API (OpenAI-compatible endpoint).
+    Requires GROQ_API_KEY. Get a free key at https://console.groq.com/keys —
+    no payment required.
+    """
+    import requests
+
+    judge_prompt = _JUDGE_PROMPT_TEMPLATE.format(prompt=prompt, response=response)
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"},
+        json={
+            "model": "llama-3.1-8b-instant",
+            "messages": [{"role": "user", "content": judge_prompt}],
+            "max_tokens": 200,
+            "temperature": 0,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"].strip()
+    try:
+        parsed = json.loads(text)
+        return JudgeResult(score=int(parsed["score"]), rationale=parsed["rationale"], mode="llm")
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return JudgeResult(score=30, rationale="[llm] judge output unparseable, treated as low confidence", mode="llm")
+
+
+def _anthropic_score(prompt: str, response: str) -> JudgeResult:
+    """Real judge call via the Anthropic API. Requires ANTHROPIC_API_KEY (paid)."""
     import anthropic
 
     client = anthropic.Anthropic()
-    judge_prompt = f"""You are grading how well an AI response is supported by its prompt/context.
-Score 0-100 (100 = fully supported and consistent, 0 = fabricated or contradicts context).
-
-Prompt: {prompt}
-Response: {response}
-
-Reply with ONLY a JSON object: {{"score": <int 0-100>, "rationale": "<one sentence>"}}"""
-
+    judge_prompt = _JUDGE_PROMPT_TEMPLATE.format(prompt=prompt, response=response)
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=200,
@@ -100,18 +133,29 @@ Reply with ONLY a JSON object: {{"score": <int 0-100>, "rationale": "<one senten
         parsed = json.loads(text)
         return JudgeResult(score=int(parsed["score"]), rationale=parsed["rationale"], mode="llm")
     except (json.JSONDecodeError, KeyError, ValueError):
-        # Fail safe: if the judge model's output can't be parsed, treat as
-        # low-confidence rather than crashing the pipeline.
         return JudgeResult(score=30, rationale="[llm] judge output unparseable, treated as low confidence", mode="llm")
 
 
 def score(prompt: str, response: str) -> JudgeResult:
-    """Public entry point — picks llm or simulated mode automatically."""
+    """
+    Public entry point. Tries, in order: Groq (free) -> Anthropic (paid) ->
+    simulated (no key needed). Any network/SDK error falls back gracefully
+    to simulated rather than crashing the pipeline.
+    """
+    if os.environ.get("GROQ_API_KEY"):
+        try:
+            return _groq_score(prompt, response)
+        except Exception as e:
+            fallback = _simulated_score(prompt, response)
+            fallback.rationale = f"[groq call failed: {e}; fell back to simulated] {fallback.rationale}"
+            return fallback
+
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
-            return _llm_score(prompt, response)
-        except Exception as e:  # network/SDK errors fall back gracefully
+            return _anthropic_score(prompt, response)
+        except Exception as e:
             fallback = _simulated_score(prompt, response)
-            fallback.rationale = f"[llm call failed: {e}; fell back to simulated] {fallback.rationale}"
+            fallback.rationale = f"[anthropic call failed: {e}; fell back to simulated] {fallback.rationale}"
             return fallback
+
     return _simulated_score(prompt, response)

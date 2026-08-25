@@ -1,0 +1,13 @@
+# Persona: Customer Support Lead
+# Low tolerance for reputational risk, but mistakes are recoverable —
+# real-time latency budget, so we favor async scoring and looser thresholds.
+use_case: customer_support_chatbot
+jurisdiction: IN
+thresholds:
+  pii_detection: block
+  hallucination_score:
+    escalate_below: 40
+    edit_below: 65
+    allow_above: 65
+scoring_mode: async
+audit_retention_days: 90

@@ -1,0 +1,13 @@
+# Persona: Internal Knowledge Manager
+# Highest risk tolerance — errors are internally correctable and lower
+# reputational exposure than a customer-facing surface.
+use_case: internal_knowledge_copilot
+jurisdiction: IN
+thresholds:
+  pii_detection: block
+  hallucination_score:
+    escalate_below: 30
+    edit_below: 55
+    allow_above: 55
+scoring_mode: async
+audit_retention_days: 90

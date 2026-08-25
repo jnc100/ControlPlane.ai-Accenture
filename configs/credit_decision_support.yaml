@@ -1,0 +1,14 @@
+# Persona: Risk / Compliance Officer
+# Near-zero tolerance for error — regulated workflow. Accept synchronous
+# (blocking) judge scoring and much stricter thresholds in exchange for
+# stronger pre-delivery review. Long audit retention for regulatory reasons.
+use_case: credit_decision_support
+jurisdiction: IN
+thresholds:
+  pii_detection: block
+  hallucination_score:
+    escalate_below: 70
+    edit_below: 85
+    allow_above: 85
+scoring_mode: sync
+audit_retention_days: 2555
